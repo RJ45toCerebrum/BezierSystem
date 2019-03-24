@@ -1,6 +1,9 @@
-﻿using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
+﻿using UnityEngine;
+using Unity.Transforms;
+using Unity.Mathematics;
+using Unity.Entities;
+using Unity.Burst;
+using Unity.Collections;
 
 namespace EvolveVR.Bezier
 {
@@ -20,7 +23,6 @@ namespace EvolveVR.Bezier
     public class PlanarBezierComponent : BezierComponent
     {
         // For now the Y-Axis is always normal of the plane; due to time contraints =(
-        // Also, the angle of intersection is always measured from the right axis of the plane transform as well
         public Transform planeTransform;
         public Color drawColor;
     }

@@ -88,9 +88,7 @@ namespace EvolveVR.Bezier
             Vector3 cp;
             Vector3 pp = BezierSystem.Evaluate(0, bc);
             Gizmos.color = bc.curveColor;
-            float t;
-            for (t = bc.drawDelta; t < N; t += bc.drawDelta)
-            {
+            for (float t = bc.drawDelta; t < N; t += bc.drawDelta) {
                 cp = BezierSystem.Evaluate(t, bc);
                 Gizmos.DrawLine(pp, cp);
                 pp = cp;
@@ -274,7 +272,7 @@ namespace EvolveVR.Bezier
         {
             int startIdx = 0;
             t = Param(t, bc, out startIdx);
-
+        
             BezierCPComponent[] cps = bc.controlPoints;
             Vector3 p0 = cps[startIdx].transform.position;
             Vector3 p1 = cps[startIdx + 1].transform.position;
@@ -329,8 +327,7 @@ namespace EvolveVR.Bezier
         {
             int p = (int)Mathf.Floor(t);
             int N = CurveCount(bc);
-            if (p >= N)
-            {
+            if (p >= N) {
                 startIdx = -1;
                 return -1;
             }
@@ -384,7 +381,7 @@ namespace EvolveVR.Bezier
             Gizmos.DrawLine(c - r - f, c - r + f);
             Gizmos.DrawLine(c + r - f, c + r + f);
 
-            Gizmos.color = Color.black;
+            Gizmos.color = Color.green;
             Gizmos.DrawSphere(comp.planeTransform.position, 0.1f);
         }
 
@@ -439,17 +436,19 @@ namespace EvolveVR.Bezier
         {
             List<Vector3> intersectionPoints = new List<Vector3>(2);
 
-            // 1) transform the curve and pop into plane space
+            /*  Steps of algo:
+             *  1) Transform the curve and point on plane into plane space
+             *  2) Get the ray going from the planeTransform position to the transformed pop
+             *  3) Make the curve y value a function of t of the ray by rotating it
+             *      by theta radians, which is the angle between [1,0] and v vectors
+             *  4) analytic root find the intersections for each curve making the entire curve
+             */
             Transform PT = bc.planeTransform;
             Vector3 planeSpacePop = PT.InverseTransformPoint(pop);
-            // only Y is normal of plane for now...
             Vector2 v = new Vector2(planeSpacePop.x, planeSpacePop.z);
             Vector2[] tpts = GetPlaneSpaceCPs(bc.controlPoints, PT);
-            // do an additional transformation such that crv is a function of y
-            // with respect to t, the param of the ray from origin in dir v
             float angle = -Angle(v);
             RotatePoints(angle, tpts);
-            // at most three roots per cubic bezier...
             float[] roots = new float[3];
 
             int CC = CurveCount(bc);
@@ -473,6 +472,27 @@ namespace EvolveVR.Bezier
             }
 
             return intersectionPoints.ToArray();
+        }
+
+        public static Vector3 IntersectCurveNearestForward(Vector3 pop, PlanarBezierComponent bc)
+        {
+            Vector3[] intersections = PlanarBezierSystem.IntersectCurve(pop, bc);
+            Vector3 v = (pop - bc.planeTransform.position);
+            v.Normalize();
+
+            Vector3 w, k = Vector3.zero;
+            float cd = Mathf.Infinity;
+            for(int i = 0; i < intersections.Length; i++)
+            {
+                w = intersections[i] - bc.planeTransform.position;
+                float dot = Vector3.Dot(v, w);
+                if (dot > 0 && dot < cd) {
+                    cd = dot;
+                    k = intersections[i];
+                }
+            }
+
+            return k;
         }
 
         // find roots analytically: http://mathworld.wolfram.com/CubicFormula.html
@@ -539,7 +559,7 @@ namespace EvolveVR.Bezier
 
             return false;
         }
-
+        
         // PT = plane transform; no y component.
         private static Vector2[] GetPlaneSpaceCPs(BezierCPComponent[] cps, Transform PT)
         {
@@ -575,6 +595,69 @@ namespace EvolveVR.Bezier
         {
             float p = 1 - t;
             return (pa * p * p * p) + (3 * pb * p * p * t) + (3 * pc * p * t * t) + (pd * t * t * t);
+        }
+    }
+
+
+    [ExecuteAlways]
+    public class RotationConstraintSystem : ComponentSystem
+    {
+        struct RotationContraintFilter
+        {
+            public RotationContraintComponent comp;
+        };
+
+        protected override void OnUpdate()
+        {
+            ComponentGroupArray<RotationContraintFilter> bezierEntities = GetEntities<RotationContraintFilter>();
+            if (bezierEntities.Length > 0) {
+                foreach(RotationContraintFilter entity in bezierEntities)
+                    ContrainRotation(entity.comp);
+            }
+        }
+
+        private void ContrainRotation(RotationContraintComponent rcc)
+        {
+            Ray ray = new Ray();
+            Plane plane = new Plane();
+
+            PlanarBezierComponent pbc = rcc.pbc;
+            ray.origin = rcc.transform.position;
+            ray.direction = rcc.transform.up;
+            plane.SetNormalAndPosition(pbc.planeTransform.up, pbc.planeTransform.position);
+
+            float t;
+            if (plane.Raycast(ray, out t))
+            {
+                Vector3 ip = ray.origin + t * ray.direction;
+                Debug.DrawLine(rcc.transform.position, ip, Color.blue);
+                Debug.DrawLine(pbc.planeTransform.position, ip, Color.green);
+                Debug.DrawLine(pbc.planeTransform.position, rcc.transform.position, Color.green);
+
+                Vector3 poc = PlanarBezierSystem.IntersectCurveNearestForward(ip, pbc);
+                Debug.DrawLine(rcc.transform.position, poc, Color.cyan);
+
+                Vector3 v = ip - pbc.planeTransform.position;
+                Vector3 w = poc - pbc.planeTransform.position;
+                if (v.sqrMagnitude > w.sqrMagnitude)
+                    RotateTo(poc, rcc);
+            }
+        }
+
+        private void RotateTo(Vector3 ip, RotationContraintComponent bc)
+        {
+            // now swing not entire way but only to the curve
+            Vector3 toIp = ip - bc.transform.position;
+            toIp.Normalize();
+            Quaternion qs = SwingTo(bc.transform.up, toIp);
+            bc.transform.rotation = qs * bc.transform.rotation;
+        }
+
+        private Quaternion SwingTo(Vector3 v, Vector3 w)
+        {
+            Vector3 cross = Vector3.Cross(v, w);
+            float theta = Vector3.SignedAngle(v, w, cross);
+            return Quaternion.AngleAxis(theta, cross);
         }
     }
 }
