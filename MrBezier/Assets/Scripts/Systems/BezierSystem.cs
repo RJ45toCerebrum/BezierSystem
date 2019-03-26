@@ -31,7 +31,7 @@ namespace EvolveVR.Bezier
             BezierCPComponent cp;
             foreach(var entity in GetEntities<CPFilter>()) {
                 cp = entity.cp;
-                cp.lp = cp.transform.localPosition;
+                cp.Lp = cp.transform.localPosition;
             }
         }
 
@@ -41,36 +41,77 @@ namespace EvolveVR.Bezier
             foreach (var entity in GetEntities<CPFilter>())
             {
                 BezierCPComponent cp = entity.cp;
-                if (!cp.tangent)
+                if (!cp.tangentInfo.tangent)
                     continue;
-
+                
                 // if this transform moves then update neighbors
                 if (ControlPointMoved(cp))
                 {
-                    Vector3 v = cp.transform.localPosition - cp.lp;
-                    cp.adjcp0.transform.localPosition += v;
-                    cp.adjcp0.lp = cp.adjcp0.transform.localPosition;
-                    cp.adjcp1.transform.localPosition += v;
-                    cp.adjcp1.lp = cp.adjcp1.transform.localPosition;
-                    cp.lp = cp.transform.localPosition;
+                    Vector3 lp = cp.transform.parent.TransformPoint(cp.Lp);
+                    Vector3 v = cp.transform.position - lp;
+                    BezierCPComponent.TangentInfo ti = cp.tangentInfo;
+                    ti.adjcp0.transform.position += v;
+                    ti.adjcp0.Lp = ti.adjcp0.transform.localPosition;
+                    ti.adjcp1.transform.position += v;
+                    ti.adjcp1.Lp = ti.adjcp1.transform.localPosition;
+                    cp.Lp = cp.transform.localPosition;
                 }
                 // if neighbor 0 moves then update neighbor 1 position
-                else if (ControlPointMoved(cp.adjcp0))
+                else if (ControlPointMoved(cp.tangentInfo.adjcp0))
                 {
-                    Vector3 v = cp.transform.localPosition - cp.adjcp0.transform.localPosition;
-                    cp.adjcp1.transform.localPosition = cp.transform.localPosition + v;
+                    Transform A0 = cp.tangentInfo.adjcp0.transform;
+                    Transform C = cp.transform;
+                    Transform A1 = cp.tangentInfo.adjcp1.transform;
 
-                    cp.adjcp1.lp = cp.adjcp1.transform.localPosition;
-                    cp.adjcp0.lp = cp.adjcp0.transform.localPosition;
-                    cp.lp = cp.transform.localPosition;
+                    if(cp.tangentInfo.lockDirection)
+                    {
+                        Vector3 v = A0.position - C.position;
+                        if (!cp.tangentInfo.lockDirectionSet) {
+                            cp.tangentInfo.lockDir = v.normalized;
+                            cp.tangentInfo.lockDirectionSet = true;
+                        }
+                        float d = Vector3.Dot(v, cp.tangentInfo.lockDir);
+                        A0.position = C.position + d * cp.tangentInfo.lockDir;
+                    }
+                    else
+                    {
+                        Vector3 v = C.position - A0.position;
+                        float d = (C.position - A1.position).magnitude;
+                        v.Normalize();
+                        A1.position = cp.transform.position + d * v;
+                        cp.tangentInfo.lockDirectionSet = false;
+                    }
+
+                    cp.tangentInfo.adjcp1.Lp = cp.tangentInfo.adjcp1.transform.localPosition;
+                    cp.tangentInfo.adjcp0.Lp = cp.tangentInfo.adjcp0.transform.localPosition;
                 }
                 // opposite of above
-                else if (ControlPointMoved(cp.adjcp1))
+                else if (ControlPointMoved(cp.tangentInfo.adjcp1))
                 {
-                    Vector3 v = cp.transform.localPosition - cp.adjcp1.transform.localPosition;
-                    cp.adjcp0.transform.localPosition = cp.transform.localPosition + v;
-                    cp.adjcp1.lp = cp.adjcp1.transform.localPosition;
-                    cp.adjcp0.lp = cp.adjcp0.transform.localPosition;
+                    Transform A0 = cp.tangentInfo.adjcp0.transform;
+                    Transform C = cp.transform;
+                    Transform A1 = cp.tangentInfo.adjcp1.transform;
+
+                    if (cp.tangentInfo.lockDirection)
+                    {
+                        Vector3 v = A1.position - C.position;
+                        if (!cp.tangentInfo.lockDirectionSet) {
+                            cp.tangentInfo.lockDir = v.normalized;
+                            cp.tangentInfo.lockDirectionSet = true;
+                        }
+                        float d = Vector3.Dot(v, cp.tangentInfo.lockDir);
+                        A1.position = C.position + d * cp.tangentInfo.lockDir;
+                    }
+                    else
+                    {
+                        Vector3 v = C.position - A1.transform.position;
+                        float d = (C.position - A0.position).magnitude;
+                        v.Normalize();
+                        A0.position = C.position + d * v;
+                    }
+
+                    cp.tangentInfo.adjcp1.Lp = A1.localPosition;
+                    cp.tangentInfo.adjcp0.Lp = A0.localPosition;
                 }
             }
         }
@@ -85,6 +126,7 @@ namespace EvolveVR.Bezier
 
             int N = CurveCount(bc);
 
+            // Draw curve
             Vector3 cp;
             Vector3 pp = BezierSystem.Evaluate(0, bc);
             Gizmos.color = bc.curveColor;
@@ -93,9 +135,17 @@ namespace EvolveVR.Bezier
                 Gizmos.DrawLine(pp, cp);
                 pp = cp;
             }
-
             cp = BezierSystem.Evaluate(N-0.0002f, bc);
             Gizmos.DrawLine(pp, cp);
+
+            // Draw CP lines
+            Gizmos.color = bc.tangentColor;
+            for (int i = 0; i < N; i++)
+            {
+                int s = 4 * i;
+                Gizmos.DrawLine(CPS[s].transform.position, CPS[s+1].transform.position);
+                Gizmos.DrawLine(CPS[s+2].transform.position, CPS[s + 3].transform.position);
+            }
         }
         
         // did bezier CP move from last set state?
@@ -103,7 +153,7 @@ namespace EvolveVR.Bezier
         {
             if (!cp)
                 throw new System.ArgumentException("Null ref. exception. Check to see if reference is missing in BezierCPComponent Script...");
-            return !EqualPoint(cp.transform.localPosition, cp.lp);
+            return !EqualPoint(cp.transform.localPosition, cp.Lp);
         }
 
         protected static bool EqualPoint(Vector3 p0, Vector3 p1)
@@ -400,7 +450,7 @@ namespace EvolveVR.Bezier
                 {
                     projPoint = plane.ClosestPointOnPlane(CP.transform.position);
                     CP.transform.position = projPoint;
-                    CP.lp = CP.transform.localPosition;
+                    CP.Lp = CP.transform.localPosition;
                     CP.transform.rotation = PT.rotation;
                 }
 
